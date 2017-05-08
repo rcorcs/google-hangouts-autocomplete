@@ -7,7 +7,11 @@ Implements a character-level language model using a recurrent neural network (RN
 
 import tensorflow as tf
 import numpy as np
-from queue import PriorityQueue
+import sys
+if sys.version_info >= (3,0):
+   from queue import PriorityQueue
+else:
+   from Queue import PriorityQueue
 import editdistance # https://pypi.python.org/pypi/editdistance
 
 class CharRNN(object):
@@ -49,17 +53,19 @@ class CharRNN(object):
         # RNN API expects self.n_steps-length list of [BATCH_SIZE, vocab_size] tensors
         x_tr = tf.transpose(self.x, perm=[1, 0, 2]) # shape: [self.n_steps, BATCH_SIZE, vocab_size]
         x_re = tf.reshape(x_tr, [-1, vocab_size]) # shape: [self.n_steps*BATCH_SIZE, vocab_size]
-        x_sp = tf.split(0, self.n_steps, x_re) # split into self.n_steps-length list of [BATCH_SIZE, vocab_size]
+        x_sp = tf.split(x_re, self.n_steps, 0) # split into self.n_steps-length list of [BATCH_SIZE, vocab_size]
 
         # RNN returns:
         #  outputs: self.n_steps-length list of [BATCH_SIZE, vocab_size]
         #  state: final state
-        lstm_cell = tf.nn.rnn_cell.BasicLSTMCell(self.lstm_size, state_is_tuple=True)
-        stacked_lstm = tf.nn.rnn_cell.MultiRNNCell([lstm_cell] * self.n_layers, state_is_tuple=True)
-        outputs, state = tf.nn.rnn(stacked_lstm, x_sp, dtype=tf.float32, sequence_length=self.seqlen)
+        lstm_cell = tf.contrib.rnn.BasicLSTMCell(self.lstm_size, state_is_tuple=True)
+        #lstm_cell_stack = [lstm_cell] * self.n_layers
+        lstm_cell_stack = [tf.contrib.rnn.BasicLSTMCell(self.lstm_size, state_is_tuple=True) for _ in xrange(self.n_layers)]
+        stacked_lstm = tf.contrib.rnn.MultiRNNCell(lstm_cell_stack, state_is_tuple=True)
+        outputs, state = tf.contrib.rnn.static_rnn(stacked_lstm, x_sp, dtype=tf.float32, sequence_length=self.seqlen)
 
         # Reshape outputs to [self.n_steps*BATCH_SIZE, vocab_size]
-        outputs = tf.reshape(tf.concat(1, outputs), [-1, self.lstm_size])
+        outputs = tf.reshape(tf.concat(outputs,1), [-1, self.lstm_size])
 
         # Output activation scores for each word in vocabulary
         self.logits = tf.matmul(outputs, W_y) + b_y
@@ -68,7 +74,7 @@ class CharRNN(object):
         y_reshaped = tf.reshape(self.y, [-1, vocab_size])
 
         # Store loss, optimizer, and accuracy as ivars to call later
-        self.loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(self.logits, y_reshaped))
+        self.loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(labels=y_reshaped,logits=self.logits))
         self.optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate).minimize(self.loss)
         correct_pred = tf.equal(tf.argmax(self.logits,1), tf.argmax(y_reshaped,1))
         self.accuracy = tf.reduce_mean(tf.cast(correct_pred, tf.float32))
@@ -79,7 +85,7 @@ class CharRNN(object):
         If you aren't restoring from a checkpoint, then you must call this before 
         doing any training or evaluating.
         '''
-        sess.run(tf.initialize_all_variables())
+        sess.run(tf.global_variables_initializer())
 
     def restore_checkpoint(self, sess, checkpoint_file):
         '''
